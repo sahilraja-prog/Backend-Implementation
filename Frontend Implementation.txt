@@ -1,0 +1,31 @@
+Frontend Implementation
+For the frontend, you can use a framework like React or Vue.js. I'll provide a basic outline using React.
+
+1. Setup Your React Project
+Create a new React app:
+
+npx create-react-app transaction-frontend
+cd transaction-frontend
+
+2.Install required packages:
+
+npm install axios chart.js react-chartjs-2
+
+
+2. Create Components
+Transaction Table Component
+In src/components/TransactionTable.js:
+
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+
+const TransactionTable = () => {
+  const [transactions, setTransactions] = useState([]);
+  const [month, setMonth] = useState('March');
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+
+  useEffect(() => {
+    fetchTransactions();
+  }, [month,
