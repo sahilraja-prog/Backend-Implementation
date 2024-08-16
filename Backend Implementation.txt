@@ -1,0 +1,249 @@
+Backend Implementation
+
+We'll use Node.js with Express for the backend, and MongoDB for the database. The task involves fetching data from a third-party API, initializing the database, and creating APIs for listing transactions, statistics, bar charts, pie charts, and a combined response.
+
+1. Setup Your Project
+
+1.Initialize a new Node.js project:
+
+mkdir transaction-api
+cd transaction-api
+npm init -y
+
+2.Install required packages:
+
+npm install express mongoose axios body-parser
+
+3.Create the project structure:
+
+mkdir src
+touch src/app.js src/routes.js src/controllers.js src/models.js
+
+2.Setup MongoDB Connection
+In src/app.js:
+
+const express = require('express');
+const mongoose = require('mongoose');
+const bodyParser = require('body-parser');
+const routes = require('./routes');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+mongoose.connect('mongodb://localhost:27017/transactions', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+});
+
+app.use(bodyParser.json());
+app.use('/api', routes);
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+3. Define Models
+In src/models.js
+
+const mongoose = require('mongoose');
+
+const transactionSchema = new mongoose.Schema({
+  productId: String,
+  title: String,
+  description: String,
+  price: Number,
+  dateOfSale: Date,
+  category: String
+});
+
+const Transaction = mongoose.model('Transaction', transactionSchema);
+
+module.exports = Transaction;
+
+
+4. Fetch and Seed Data
+In src/controllers.js
+
+const axios = require('axios');
+const Transaction = require('./models');
+
+const SEED_URL = 'https://s3.amazonaws.com/roxiler.com/product_transaction.json';
+
+const seedDatabase = async () => {
+  try {
+    const response = await axios.get(SEED_URL);
+    const transactions = response.data;
+
+    await Transaction.deleteMany({});
+    await Transaction.insertMany(transactions);
+
+    console.log('Database seeded successfully');
+  } catch (error) {
+    console.error('Error seeding database:', error);
+  }
+};
+
+const getTransactions = async (req, res) => {
+  try {
+    const { month = 'March', page = 1, perPage = 10, search = '' } = req.query;
+    const startDate = new Date(`2024-${month}-01T00:00:00Z`);
+    const endDate = new Date(startDate);
+    endDate.setMonth(endDate.getMonth() + 1);
+
+    const query = {
+      dateOfSale: { $gte: startDate, $lt: endDate },
+      $or: [
+        { title: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } },
+        { price: { $regex: search, $options: 'i' } }
+      ]
+    };
+
+    const transactions = await Transaction.find(query)
+      .skip((page - 1) * perPage)
+      .limit(perPage);
+
+    const count = await Transaction.countDocuments(query);
+
+    res.json({ transactions, total: count });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch transactions' });
+  }
+};
+
+const getStatistics = async (req, res) => {
+  try {
+    const { month = 'March' } = req.query;
+    const startDate = new Date(`2024-${month}-01T00:00:00Z`);
+    const endDate = new Date(startDate);
+    endDate.setMonth(endDate.getMonth() + 1);
+
+    const totalSales = await Transaction.aggregate([
+      { $match: { dateOfSale: { $gte: startDate, $lt: endDate } } },
+      { $group: { _id: null, totalAmount: { $sum: '$price' }, totalItems: { $sum: 1 } } }
+    ]);
+
+    const notSoldItems = await Transaction.countDocuments({ dateOfSale: { $lt: startDate } });
+
+    res.json({
+      totalSales: totalSales[0]?.totalAmount || 0,
+      totalSoldItems: totalSales[0]?.totalItems || 0,
+      totalNotSoldItems: notSoldItems
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch statistics' });
+  }
+};
+
+const getBarChartData = async (req, res) => {
+  try {
+    const { month = 'March' } = req.query;
+    const startDate = new Date(`2024-${month}-01T00:00:00Z`);
+    const endDate = new Date(startDate);
+    endDate.setMonth(endDate.getMonth() + 1);
+
+    const priceRanges = [
+      { $lte: 100 },
+      { $gt: 100, $lte: 200 },
+      { $gt: 200, $lte: 300 },
+      { $gt: 300, $lte: 400 },
+      { $gt: 400, $lte: 500 },
+      { $gt: 500, $lte: 600 },
+      { $gt: 600, $lte: 700 },
+      { $gt: 700, $lte: 800 },
+      { $gt: 800, $lte: 900 },
+      { $gt: 900 }
+    ];
+
+    const barChartData = await Promise.all(priceRanges.map(async (range) => {
+      const count = await Transaction.countDocuments({
+        dateOfSale: { $gte: startDate, $lt: endDate },
+        price: range
+      });
+      return { range: JSON.stringify(range), count };
+    }));
+
+    res.json(barChartData);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch bar chart data' });
+  }
+};
+
+const getPieChartData = async (req, res) => {
+  try {
+    const { month = 'March' } = req.query;
+    const startDate = new Date(`2024-${month}-01T00:00:00Z`);
+    const endDate = new Date(startDate);
+    endDate.setMonth(endDate.getMonth() + 1);
+
+    const pieChartData = await Transaction.aggregate([
+      { $match: { dateOfSale: { $gte: startDate, $lt: endDate } } },
+      { $group: { _id: '$category', count: { $sum: 1 } } }
+    ]);
+
+    res.json(pieChartData);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch pie chart data' });
+  }
+};
+
+const getCombinedData = async (req, res) => {
+  try {
+    const { month = 'March' } = req.query;
+
+    const [transactions, statistics, barChartData, pieChartData] = await Promise.all([
+      getTransactions({ query: { month } }),
+      getStatistics({ query: { month } }),
+      getBarChartData({ query: { month } }),
+      getPieChartData({ query: { month } })
+    ]);
+
+    res.json({
+      transactions: transactions.transactions,
+      statistics,
+      barChartData,
+      pieChartData
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch combined data' });
+  }
+};
+
+module.exports = {
+  seedDatabase,
+  getTransactions,
+  getStatistics,
+  getBarChartData,
+  getPieChartData,
+  getCombinedData
+};
+
+5. Define Routes
+In src/routes.js
+
+const express = require('express');
+const {
+  seedDatabase,
+  getTransactions,
+  getStatistics,
+  getBarChartData,
+  getPieChartData,
+  getCombinedData
+} = require('./controllers');
+
+const router = express.Router();
+
+router.get('/seed', (req, res) => {
+  seedDatabase().then(() => res.send('Database seeded'));
+});
+
+router.get('/transactions', getTransactions);
+router.get('/statistics', getStatistics);
+router.get('/bar-chart', getBarChartData);
+router.get('/pie-chart', getPieChartData);
+router.get('/combined', getCombinedData);
+
+module.exports = router;
+
+
+
